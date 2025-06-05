@@ -1,0 +1,12 @@
+Django>=4.2.0
+djangorestframework>=3.14.0
+django-cors-headers>=4.3.0
+psycopg2-binary>=2.9.9
+python-dotenv>=1.0.0
+google-generativeai>=0.3.0
+PyPDF2>=3.0.0
+python-magic>=0.4.27
+django-filter>=23.5
+drf-yasg>=1.21.7
+packaging>=21.0
+setuptools>=45.0 
