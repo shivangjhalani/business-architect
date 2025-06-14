@@ -63,6 +63,8 @@ business-cap/
 
 4. Create the postgres role and database:
    ```bash
+   export PGHOST=$PWD/pg_socket
+
    # Create the postgres superuser role with password
    createuser -s postgres
    
