@@ -19,7 +19,7 @@ business-cap/
 1. Navigate to the backend directory and activate the virtual environment:
    ```bash
    cd backend
-   python -n venv venv
+   python -m venv venv
    source venv/bin/activate  # On Unix/macOS
    # or
    .\venv\Scripts\activate  # On Windows
