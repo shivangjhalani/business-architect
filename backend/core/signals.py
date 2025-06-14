@@ -4,6 +4,7 @@ from django.db import transaction
 import logging
 from .models import Capability, BusinessGoal, CapabilityRecommendation
 from .vector_manager import vector_manager
+from .constants import ContentTypes
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ def capability_post_save(sender, instance, created, **kwargs):
             # Use transaction.on_commit to ensure the model is saved before embedding
             def create_embedding():
                 try:
-                    vector_manager.add_vector('CAPABILITY', str(instance.id), text)
+                    vector_manager.add_vector(ContentTypes.CAPABILITY, str(instance.id), text)
                     logger.info(f"{'Created' if created else 'Updated'} embedding for capability: {instance.name}")
                 except Exception as e:
                     logger.error(f"Error creating embedding for capability {instance.id}: {e}")
@@ -28,7 +29,7 @@ def capability_post_save(sender, instance, created, **kwargs):
             # Remove embedding for deprecated/archived capabilities
             def remove_embedding():
                 try:
-                    vector_manager.remove_vector('CAPABILITY', str(instance.id))
+                    vector_manager.remove_vector(ContentTypes.CAPABILITY, str(instance.id))
                     logger.info(f"Removed embedding for deprecated capability: {instance.name}")
                 except Exception as e:
                     logger.error(f"Error removing embedding for capability {instance.id}: {e}")
@@ -42,7 +43,7 @@ def capability_post_save(sender, instance, created, **kwargs):
 def capability_post_delete(sender, instance, **kwargs):
     """Remove vector embedding when a Capability is deleted."""
     try:
-        vector_manager.remove_vector('CAPABILITY', str(instance.id))
+        vector_manager.remove_vector(ContentTypes.CAPABILITY, str(instance.id))
         logger.info(f"Removed embedding for deleted capability: {instance.name}")
     except Exception as e:
         logger.error(f"Error removing embedding for deleted capability {instance.id}: {e}")
@@ -55,7 +56,7 @@ def business_goal_post_save(sender, instance, created, **kwargs):
         
         def create_embedding():
             try:
-                vector_manager.add_vector('BUSINESS_GOAL', str(instance.id), text)
+                vector_manager.add_vector(ContentTypes.BUSINESS_GOAL, str(instance.id), text)
                 logger.info(f"{'Created' if created else 'Updated'} embedding for business goal: {instance.title}")
             except Exception as e:
                 logger.error(f"Error creating embedding for business goal {instance.id}: {e}")
@@ -69,7 +70,7 @@ def business_goal_post_save(sender, instance, created, **kwargs):
 def business_goal_post_delete(sender, instance, **kwargs):
     """Remove vector embedding when a BusinessGoal is deleted."""
     try:
-        vector_manager.remove_vector('BUSINESS_GOAL', str(instance.id))
+        vector_manager.remove_vector(ContentTypes.BUSINESS_GOAL, str(instance.id))
         logger.info(f"Removed embedding for deleted business goal: {instance.title}")
     except Exception as e:
         logger.error(f"Error removing embedding for deleted business goal {instance.id}: {e}")
@@ -90,7 +91,7 @@ def recommendation_post_save(sender, instance, created, **kwargs):
         
         def create_embedding():
             try:
-                vector_manager.add_vector('RECOMMENDATION', str(instance.id), text)
+                vector_manager.add_vector(ContentTypes.RECOMMENDATION, str(instance.id), text)
                 logger.info(f"{'Created' if created else 'Updated'} embedding for recommendation: {instance}")
             except Exception as e:
                 logger.error(f"Error creating embedding for recommendation {instance.id}: {e}")
@@ -104,7 +105,7 @@ def recommendation_post_save(sender, instance, created, **kwargs):
 def recommendation_post_delete(sender, instance, **kwargs):
     """Remove vector embedding when a CapabilityRecommendation is deleted."""
     try:
-        vector_manager.remove_vector('RECOMMENDATION', str(instance.id))
+        vector_manager.remove_vector(ContentTypes.RECOMMENDATION, str(instance.id))
         logger.info(f"Removed embedding for deleted recommendation: {instance}")
     except Exception as e:
         logger.error(f"Error removing embedding for deleted recommendation {instance.id}: {e}") 

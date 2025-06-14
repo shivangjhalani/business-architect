@@ -10,6 +10,7 @@ from typing import List, Dict, Tuple, Optional, Any
 from django.conf import settings
 from django.db import transaction
 import google.generativeai as genai
+from .constants import ContentTypes
 
 logger = logging.getLogger(__name__)
 
@@ -118,13 +119,14 @@ class VectorManager:
             embedding = self.generate_embedding(text)
             
             # Convert content_type to index key
-            index_key = content_type.lower() + 's' if not content_type.lower().endswith('s') else content_type.lower()
-            if content_type == 'BUSINESS_GOAL':
-                index_key = 'business_goals'
-            elif content_type == 'RECOMMENDATION':
-                index_key = 'recommendations'
-            elif content_type == 'CAPABILITY':
-                index_key = 'capabilities'
+            index_key_map = {
+                ContentTypes.BUSINESS_GOAL: 'business_goals',
+                ContentTypes.RECOMMENDATION: 'recommendations', 
+                ContentTypes.CAPABILITY: 'capabilities'
+            }
+            index_key = index_key_map.get(content_type)
+            if not index_key:
+                raise ValueError(f"Unknown content type: {content_type}")
             
             # Add to FAISS index
             index = self.indexes[index_key]
@@ -160,13 +162,14 @@ class VectorManager:
             query_embedding = self.generate_embedding(query_text)
             
             # Convert content_type to index key
-            index_key = content_type.lower() + 's' if not content_type.lower().endswith('s') else content_type.lower()
-            if content_type == 'BUSINESS_GOAL':
-                index_key = 'business_goals'
-            elif content_type == 'RECOMMENDATION':
-                index_key = 'recommendations'
-            elif content_type == 'CAPABILITY':
-                index_key = 'capabilities'
+            index_key_map = {
+                ContentTypes.BUSINESS_GOAL: 'business_goals',
+                ContentTypes.RECOMMENDATION: 'recommendations', 
+                ContentTypes.CAPABILITY: 'capabilities'
+            }
+            index_key = index_key_map.get(content_type)
+            if not index_key:
+                raise ValueError(f"Unknown content type: {content_type}")
             
             index = self.indexes[index_key]
             
@@ -197,7 +200,7 @@ class VectorManager:
                             }
                             
                             # Add object-specific fields
-                            if content_type == 'CAPABILITY':
+                            if content_type == ContentTypes.CAPABILITY:
                                 result.update({
                                     'name': related_obj.name,
                                     'description': related_obj.description,
@@ -205,7 +208,7 @@ class VectorManager:
                                     'strategic_importance': related_obj.strategic_importance,
                                     'status': related_obj.status,
                                 })
-                            elif content_type == 'BUSINESS_GOAL':
+                            elif content_type == ContentTypes.BUSINESS_GOAL:
                                 result.update({
                                     'title': related_obj.title,
                                     'description': related_obj.description,
@@ -213,7 +216,7 @@ class VectorManager:
                                     'submitted_at': related_obj.submitted_at.isoformat(),
                                     'recommendations_count': related_obj.recommendations_count,
                                 })
-                            elif content_type == 'RECOMMENDATION':
+                            elif content_type == ContentTypes.RECOMMENDATION:
                                 result.update({
                                     'recommendation_type': related_obj.recommendation_type,
                                     'proposed_name': related_obj.proposed_name,
@@ -272,13 +275,14 @@ class VectorManager:
             logger.info(f"Rebuilding {content_type} index...")
             
             # Convert content_type to index key
-            index_key = content_type.lower() + 's' if not content_type.lower().endswith('s') else content_type.lower()
-            if content_type == 'BUSINESS_GOAL':
-                index_key = 'business_goals'
-            elif content_type == 'RECOMMENDATION':
-                index_key = 'recommendations'
-            elif content_type == 'CAPABILITY':
-                index_key = 'capabilities'
+            index_key_map = {
+                ContentTypes.BUSINESS_GOAL: 'business_goals',
+                ContentTypes.RECOMMENDATION: 'recommendations', 
+                ContentTypes.CAPABILITY: 'capabilities'
+            }
+            index_key = index_key_map.get(content_type)
+            if not index_key:
+                raise ValueError(f"Unknown content type: {content_type}")
             
             # Create new index
             self.indexes[index_key] = faiss.IndexFlatIP(self.embedding_dimension)
@@ -287,23 +291,23 @@ class VectorManager:
             self._get_models()[0].objects.filter(content_type=content_type).delete()
             
             # Rebuild from source objects
-            if content_type == 'CAPABILITY':
+            if content_type == ContentTypes.CAPABILITY:
                 objects = self._get_models()[1].objects.filter(status__in=['CURRENT', 'PROPOSED'])
                 for obj in objects:
                     text = f"{obj.name} {obj.description}"
-                    self.add_vector('CAPABILITY', str(obj.id), text)
+                    self.add_vector(ContentTypes.CAPABILITY, str(obj.id), text)
                     
-            elif content_type == 'BUSINESS_GOAL':
+            elif content_type == ContentTypes.BUSINESS_GOAL:
                 objects = self._get_models()[2].objects.all()
                 for obj in objects:
                     text = f"{obj.title} {obj.description}"
-                    self.add_vector('BUSINESS_GOAL', str(obj.id), text)
+                    self.add_vector(ContentTypes.BUSINESS_GOAL, str(obj.id), text)
                     
-            elif content_type == 'RECOMMENDATION':
+            elif content_type == ContentTypes.RECOMMENDATION:
                 objects = self._get_models()[3].objects.all()
                 for obj in objects:
                     text = f"{obj.get_recommendation_type_display()} {obj.proposed_name or ''} {obj.proposed_description or ''} {obj.additional_details or ''}"
-                    self.add_vector('RECOMMENDATION', str(obj.id), text)
+                    self.add_vector(ContentTypes.RECOMMENDATION, str(obj.id), text)
             
             logger.info(f"Successfully rebuilt {content_type} index with {self.indexes[index_key].ntotal} vectors")
             

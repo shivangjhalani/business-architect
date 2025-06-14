@@ -9,8 +9,7 @@ business-cap/
 ├── backend/           # Django backend
 │   └── venv/         # Python virtual environment
 ├── frontend/         # React frontend
-├── pgdata/          # PostgreSQL data directory
-└── PLAN.md          # Project plan and documentation
+└── pgdata/          # PostgreSQL data directory
 ```
 
 ## Setup Instructions
@@ -20,6 +19,7 @@ business-cap/
 1. Navigate to the backend directory and activate the virtual environment:
    ```bash
    cd backend
+   python -n venv venv
    source venv/bin/activate  # On Unix/macOS
    # or
    .\venv\Scripts\activate  # On Windows
@@ -30,22 +30,55 @@ business-cap/
    pip install -r requirements.txt
    ```
 
-### Database Setup
-
-1. Initialize PostgreSQL:
+3. Run Django migrations:
    ```bash
-   mkdir pgdata
-   initdb -D pgdata -U pgdata/postgres --pwprompt
+   python manage.py makemigrations
+   python manage.py migrate
    ```
 
-2. Start PostgreSQL server:
+4. Start the Django development server:
+   ```bash
+   python manage.py runserver
+   ```
+
+### Database Setup
+
+
+1. Setup pg:
+   ```bash
+   mkdir pgdata pg_socket
+   initdb -D pgdata --auth-local=trust --auth-host=scram-sha-256
+   ```
+
+2. Set local pg_socket:
+   ```bash
+   # Update postgresql.conf to use local socket directory
+   sed -i "s|#unix_socket_directories = '/run/postgresql'|unix_socket_directories = '$PWD/pg_socket'|" pgdata/postgresql.conf
+   ```
+
+3. Start PostgreSQL server:
    ```bash
    pg_ctl -D pgdata -l pgdata/postgres.log start
    ```
 
-3. Create database:
+4. Create the postgres role and database:
    ```bash
-   createdb -U postgres <dbname>
+   # Create the postgres superuser role with password
+   createuser -s postgres
+   
+   # Set a password for the postgres user (connect to the default postgres database)
+   psql -d postgres -c "ALTER USER postgres PASSWORD '<password>';"
+   
+   # Create your database
+   createdb -U postgres business_cap
+   ```
+
+5. Update .env using .env.example:
+
+
+6. Stop PostgreSQL server when done:
+   ```bash
+   pg_ctl -D pgdata stop
    ```
 
 ### Frontend Setup

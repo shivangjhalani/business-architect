@@ -21,6 +21,7 @@ from .serializers import (
     CapabilityRecommendationSerializer,
     LLMQuerySerializer, LLMResponseSerializer
 )
+from .constants import API_TO_MODEL_CONTENT_TYPE, VALID_API_CONTENT_TYPES, ContentTypes
 
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 model = genai.GenerativeModel('gemini-2.0-flash-exp')
@@ -157,7 +158,7 @@ class CapabilityViewSet(BaseViewMixin, viewsets.ModelViewSet):
         try:
             query_text = f"{capability.name} {capability.description}"
             results = vector_manager.search_similar(
-                content_type='CAPABILITY',
+                content_type=ContentTypes.CAPABILITY,
                 query_text=query_text,
                 k=limit + 1,
                 threshold=threshold
@@ -453,14 +454,28 @@ class CapabilityRecommendationViewSet(BaseViewMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
-        recommendation = self.get_object()
-        
-        if recommendation.status != 'PENDING':
-            return self.error_response('Only pending recommendations can be rejected')
-        
-        recommendation.status = 'REJECTED'
-        recommendation.save()
-        return Response({'status': 'recommendation rejected'})
+        try:
+            recommendation = self.get_object()
+            
+            if recommendation.status != 'PENDING':
+                return Response(
+                    {'error': 'Only pending recommendations can be rejected'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            recommendation.status = 'REJECTED'
+            recommendation.save()
+            
+            return Response({
+                'status': 'recommendation rejected',
+                'message': f'Recommendation "{recommendation.get_recommendation_type_display()}" has been rejected'
+            })
+            
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to reject recommendation: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @action(detail=True, methods=['delete'])
     def permanent_delete(self, request, pk=None):
@@ -615,9 +630,9 @@ Please provide a clear, actionable response that helps the user understand busin
         
         try:
             search_configs = [
-                ('CAPABILITY', 'capabilities', 'Related Capabilities:', 3),
-                ('BUSINESS_GOAL', 'goals', 'Similar Past Goals:', 2),
-                ('RECOMMENDATION', 'recommendations', 'Related Recommendations:', 2)
+                            (ContentTypes.CAPABILITY, 'capabilities', 'Related Capabilities:', 3),
+            (ContentTypes.BUSINESS_GOAL, 'goals', 'Similar Past Goals:', 2),
+            (ContentTypes.RECOMMENDATION, 'recommendations', 'Related Recommendations:', 2)
             ]
             
             total_items = 0
@@ -626,21 +641,21 @@ Please provide a clear, actionable response that helps the user understand busin
                 if results:
                     context_parts.append(f"\n{header}")
                     for result in results:
-                        if content_type == 'CAPABILITY':
+                        if content_type == ContentTypes.CAPABILITY:
                             context_parts.append(f"- {result['name']}: {result['description'][:100]}...")
                             summary['similar_capabilities'].append({
                                 'name': result['name'],
                                 'similarity_score': result['similarity_score'],
                                 'relevance': f"Relevant for {query.lower()}"
                             })
-                        elif content_type == 'BUSINESS_GOAL':
+                        elif content_type == ContentTypes.BUSINESS_GOAL:
                             context_parts.append(f"- {result['title']}: {result['status']}")
                             summary['similar_goals'].append({
                                 'title': result['title'],
                                 'similarity_score': result['similarity_score'],
                                 'outcome': f"Status: {result['status']}"
                             })
-                        elif content_type == 'RECOMMENDATION':
+                        elif content_type == ContentTypes.RECOMMENDATION:
                             context_parts.append(f"- {result['recommendation_type']}: {result.get('proposed_name', 'N/A')} ({result['status']})")
                             summary['similar_recommendations'].append({
                                 'type': result['recommendation_type'],
@@ -688,15 +703,9 @@ class VectorSearchAPIView(APIView):
     def post(self, request, content_type):
         from .vector_manager import vector_manager
         
-        content_type_map = {
-            'capabilities': 'CAPABILITY',
-            'business_goals': 'BUSINESS_GOAL', 
-            'recommendations': 'RECOMMENDATION'
-        }
-        
-        if content_type not in content_type_map:
+        if content_type not in VALID_API_CONTENT_TYPES:
             return Response(
-                {'error': f'Invalid content type. Must be one of: {list(content_type_map.keys())}'},
+                {'error': f'Invalid content type. Must be one of: {VALID_API_CONTENT_TYPES}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -710,7 +719,7 @@ class VectorSearchAPIView(APIView):
         try:
             start_time = timezone.now()
             results = vector_manager.search_similar(
-                content_type=content_type_map[content_type],
+                content_type=API_TO_MODEL_CONTENT_TYPE[content_type],
                 query_text=query,
                 k=limit,
                 threshold=threshold
@@ -777,15 +786,17 @@ class SimilarObjectsAPIView(APIView):
             )
     
     def _get_source_object(self, content_type, object_id):
+        from .constants import APIContentTypes
+        
         content_type_configs = {
-            'capabilities': (Capability, 'CAPABILITY', lambda obj: f"{obj.name} {obj.description}"),
-            'business_goals': (BusinessGoal, 'BUSINESS_GOAL', lambda obj: f"{obj.title} {obj.description}"),
-            'recommendations': (CapabilityRecommendation, 'RECOMMENDATION', 
+            APIContentTypes.CAPABILITIES: (Capability, ContentTypes.CAPABILITY, lambda obj: f"{obj.name} {obj.description}"),
+            APIContentTypes.BUSINESS_GOALS: (BusinessGoal, ContentTypes.BUSINESS_GOAL, lambda obj: f"{obj.title} {obj.description}"),
+            APIContentTypes.RECOMMENDATIONS: (CapabilityRecommendation, ContentTypes.RECOMMENDATION, 
                               lambda obj: f"{obj.get_recommendation_type_display()} {obj.proposed_name or ''} {obj.additional_details or ''}")
         }
         
         if content_type not in content_type_configs:
-            raise ValueError(f'Invalid content type. Must be one of: {list(content_type_configs.keys())}')
+            raise ValueError(f'Invalid content type. Must be one of: {VALID_API_CONTENT_TYPES}')
         
         model_class, model_content_type, query_builder = content_type_configs[content_type]
         
@@ -857,13 +868,7 @@ class VectorManagementAPIView(APIView):
             stats = vector_manager.get_index_stats()
             VectorEmbedding = vector_manager._get_models()[0]
             
-            content_type_map = {
-                'capabilities': 'CAPABILITY',
-                'business_goals': 'BUSINESS_GOAL',
-                'recommendations': 'RECOMMENDATION'
-            }
-            
-            for content_type, model_content_type in content_type_map.items():
+            for content_type, model_content_type in API_TO_MODEL_CONTENT_TYPE.items():
                 latest_embedding = VectorEmbedding.objects.filter(
                     content_type=model_content_type
                 ).order_by('-updated_at').first()
@@ -898,16 +903,10 @@ class VectorManagementAPIView(APIView):
     def _handle_rebuild(self, request, vector_manager):
         indexes = request.data.get('indexes', ['capabilities', 'business_goals', 'recommendations'])
         
-        content_type_map = {
-            'capabilities': 'CAPABILITY',
-            'business_goals': 'BUSINESS_GOAL',
-            'recommendations': 'RECOMMENDATION'
-        }
-        
         try:
             results = {}
             for index_name in indexes:
-                if content_type := content_type_map.get(index_name):
+                if content_type := API_TO_MODEL_CONTENT_TYPE.get(index_name):
                     vector_manager.rebuild_index(content_type)
                     results[index_name] = 'rebuilt successfully'
             

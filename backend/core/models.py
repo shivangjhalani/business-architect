@@ -496,40 +496,43 @@ class VectorEmbedding(models.Model):
 
     def clean(self):
         """Custom validation for the model."""
+        from .constants import ContentTypes
         super().clean()
         
         # Validate that the referenced object exists
-        if self.content_type == 'CAPABILITY':
+        if self.content_type == ContentTypes.CAPABILITY:
             if not Capability.objects.filter(id=self.object_id).exists():
                 raise ValidationError(f"Capability with id {self.object_id} does not exist.")
-        elif self.content_type == 'BUSINESS_GOAL':
+        elif self.content_type == ContentTypes.BUSINESS_GOAL:
             if not BusinessGoal.objects.filter(id=self.object_id).exists():
                 raise ValidationError(f"BusinessGoal with id {self.object_id} does not exist.")
-        elif self.content_type == 'RECOMMENDATION':
+        elif self.content_type == ContentTypes.RECOMMENDATION:
             if not CapabilityRecommendation.objects.filter(id=self.object_id).exists():
                 raise ValidationError(f"CapabilityRecommendation with id {self.object_id} does not exist.")
 
     @property
     def related_object(self):
         """Get the related object (Capability, BusinessGoal, or CapabilityRecommendation)."""
+        from .constants import ContentTypes
         try:
-            if self.content_type == 'CAPABILITY':
+            if self.content_type == ContentTypes.CAPABILITY:
                 return Capability.objects.get(id=self.object_id)
-            elif self.content_type == 'BUSINESS_GOAL':
+            elif self.content_type == ContentTypes.BUSINESS_GOAL:
                 return BusinessGoal.objects.get(id=self.object_id)
-            elif self.content_type == 'RECOMMENDATION':
+            elif self.content_type == ContentTypes.RECOMMENDATION:
                 return CapabilityRecommendation.objects.get(id=self.object_id)
         except (Capability.DoesNotExist, BusinessGoal.DoesNotExist, CapabilityRecommendation.DoesNotExist):
             return None
 
     def get_display_text(self):
         """Get a human-readable representation of the embedded content."""
+        from .constants import ContentTypes
         obj = self.related_object
         if obj:
-            if self.content_type == 'CAPABILITY':
+            if self.content_type == ContentTypes.CAPABILITY:
                 return f"{obj.name}: {obj.description[:100]}..."
-            elif self.content_type == 'BUSINESS_GOAL':
+            elif self.content_type == ContentTypes.BUSINESS_GOAL:
                 return f"{obj.title}: {obj.description[:100]}..."
-            elif self.content_type == 'RECOMMENDATION':
+            elif self.content_type == ContentTypes.RECOMMENDATION:
                 return f"{obj.get_recommendation_type_display()}: {obj.proposed_name or obj.additional_details[:100]}..."
         return "Related object not found"
