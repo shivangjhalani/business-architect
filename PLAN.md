@@ -1,6 +1,6 @@
 ## Project: AI-Powered Business Capability Map Management System
 
-**Goal:** Develop a minimal, yet robust, AI-powered application to manage, analyze, and evolve an organization's business capability map. The application will leverage the Gemini API for intelligent insights and recommendations, with a Django backend for business logic and data persistence, and a React frontend for an intuitive user experience.
+**Goal:** Develop a minimal, yet robust, AI-powered application to manage, analyze, and evolve an organization's business capability map. The application will leverage the Gemini API for intelligent insights and recommendations, enhanced with FAISS vector database for semantic search and improved context retrieval, with a Django backend for business logic and data persistence, and a React frontend for an intuitive user experience.
 
 ### Development Environment & Setup
 
@@ -10,6 +10,7 @@
   * Python 3.11+ for Django backend
   * Node.js 18+ for React frontend
   * PostgreSQL for database
+  * FAISS for vector similarity search
   * Development tools (git, curl, etc.)
 
 **Python Virtual Environment:**
@@ -20,6 +21,17 @@
   source venv/bin/activate  # On Unix/macOS
   # or
   .\venv\Scripts\activate  # On Windows
+  ```
+
+**Vector Database Setup:**
+* FAISS (Facebook AI Similarity Search) will be used for semantic search capabilities:
+  ```bash
+  # Install FAISS in the virtual environment
+  pip install faiss-cpu
+  # For GPU support (optional): pip install faiss-gpu
+  
+  # Initialize vector storage directory
+  mkdir -p backend/vector_storage
   ```
 
 **PostgreSQL Setup:**
@@ -98,6 +110,36 @@ The application revolves around two primary entities: **Business Capabilities** 
     * `recommended_by_ai_at` (DateTimeField, auto_now_add=True)
     * `applied_at` (DateTimeField, null=True, blank=True)
 
+**1.4. Vector Database Models & Integration (FAISS):**
+
+* **`VectorEmbedding` (Django Model):** Stores metadata for vector embeddings.
+    * `id` (UUIDField - Primary Key)
+    * `content_type` (CharField, choices=['CAPABILITY', 'BUSINESS_GOAL', 'RECOMMENDATION']): Type of content embedded.
+    * `object_id` (UUIDField): Foreign key to the related object.
+    * `embedding_model` (CharField, default='text-embedding-004'): Model used to generate embeddings.
+    * `vector_index` (IntegerField): Index position in FAISS vector store.
+    * `created_at` (DateTimeField, auto_now_add=True)
+    * `updated_at` (DateTimeField, auto_now=True)
+
+* **FAISS Vector Storage Structure:**
+    * **Capability Vectors:** Store embeddings of capability names + descriptions for semantic similarity search.
+    * **Business Goal Vectors:** Store embeddings of goal titles + descriptions for finding similar past goals.
+    * **Recommendation Vectors:** Store embeddings of recommendation details for pattern matching and reuse.
+    * **Vector Files:** Stored in `backend/vector_storage/` directory:
+        * `capabilities.faiss` - FAISS index for capabilities
+        * `business_goals.faiss` - FAISS index for business goals  
+        * `recommendations.faiss` - FAISS index for recommendations
+
+* **Vector Service Layer:**
+    * **`VectorManager` (Python Class):** Handles all FAISS operations.
+        * `generate_embedding(text)` - Generate embeddings using Gemini
+        * `add_vector(embedding, metadata)` - Add new vector to FAISS index
+        * `search_similar(query_embedding, k=5)` - Find k most similar vectors
+        * `update_vector(index, embedding)` - Update existing vector
+        * `delete_vector(index)` - Remove vector from index
+        * `save_index()` - Persist FAISS index to disk
+        * `load_index()` - Load FAISS index from disk
+
 ---
 
 ### 2. Backend Implementation (Django & PostgreSQL)
@@ -111,30 +153,53 @@ The application revolves around two primary entities: **Business Capabilities** 
     * `GET`: Retrieve a single capability.
     * `PUT`/`PATCH`: Update an existing capability.
     * `DELETE`: Delete a capability (handle cascading or disassociating children).
+* **`api/capabilities/<uuid:id>/similar/`:**
+    * `GET`: Find similar capabilities using vector search. Query parameters: `limit` (default 5), `threshold` (similarity threshold).
+* **`api/capabilities/search/`:**
+    * `POST`: Semantic search across capabilities. Request body: `{"query": "text", "limit": 10}`.
 * **`api/business-goals/`:**
     * `GET`: List all business goals.
     * `POST`: Submit a new business goal. Allow `multipart/form-data` for optional PDF upload.
 * **`api/business-goals/<uuid:id>/analyze/`:**
     * `POST`: Trigger the AI analysis for a specific business goal. This endpoint should be asynchronous, initiating a background task (e.g., using Celery, though for "minimal" we can initially just run it synchronously or use Django's `threading` for a simpler background worker if it's not too long-running).
+* **`api/business-goals/<uuid:id>/similar/`:**
+    * `GET`: Find similar business goals using vector search to provide context for analysis.
 * **`api/business-goals/<uuid:id>/recommendations/`:**
     * `GET`: Retrieve all `CapabilityRecommendation` objects associated with a specific business goal.
+* **`api/business-goals/search/`:**
+    * `POST`: Semantic search across business goals. Request body: `{"query": "text", "limit": 10}`.
 * **`api/recommendations/<uuid:id>/apply/`:**
     * `POST`: Apply a specific `CapabilityRecommendation` to update the `Capability` map. This involves creating, modifying, or deleting `Capability` records based on the recommendation type.
+* **`api/recommendations/<uuid:id>/similar/`:**
+    * `GET`: Find similar past recommendations to validate or suggest improvements.
+* **`api/recommendations/search/`:**
+    * `POST`: Semantic search across recommendations. Request body: `{"query": "text", "limit": 10}`.
 * **`api/llm/query/`:**
-    * `POST`: General purpose endpoint for user-initiated LLM questions.
+    * `POST`: AI assistant endpoint with automatic vector context enhancement.
         * **Request Body:** `{"query": "string", "context": "string (optional, e.g., current capability map snapshot)"}`
-        * **Response Body:** `{"answer": "string"}`
+        * **Response Body:** `{"answer": "string", "query": "string", "context_used": "string", "vector_context": {"similar_capabilities": [...], "similar_goals": [...], "similar_recommendations": [...], "context_enhancement": "string"}}`
+        * **Vector Enhancement:** Automatically searches for similar capabilities, goals, and recommendations to enhance AI responses with relevant context.
+* **`api/vectors/rebuild/`:**
+    * `POST`: Rebuild all FAISS indexes (admin operation). Useful after bulk data changes.
+* **`api/vectors/status/`:**
+    * `GET`: Get status of vector indexes (count, last updated, etc.).
 
 **2.2. LLM Integration Logic (Gemini API - Python Client):**
 
 * **Configuration:**
     * Store `GEMINI_API_KEY` securely in Django settings or environment variables.
     * Initialize the Gemini client.
+    * Configure FAISS vector manager for embedding generation and similarity search.
 * **A. Interactive Business Q&A (`api/llm/query/`):**
     * Receive user `query`.
+    * **Vector-Enhanced Context Retrieval:**
+        * Generate embedding for the user query using Gemini embedding API.
+        * Search for similar capabilities, goals, and recommendations using FAISS.
+        * Retrieve top 3-5 most relevant items from each category.
     * **Prompt Engineering:** Construct a prompt that includes:
         * System instructions: "You are a business architect AI. Answer questions about business capabilities and strategy concisely."
         * Context: Dynamically fetch and include a summary of the current business capability map (e.g., top-level capabilities and their descriptions) from the database to provide context to the LLM.
+        * **Enhanced Context from Vector Search:** Include similar capabilities, past goals, and recommendations found via vector search.
         * User query.
     * Call `gemini_pro.generate_content()` with the constructed prompt.
     * Return the LLM's generated `text`.
@@ -142,38 +207,35 @@ The application revolves around two primary entities: **Business Capabilities** 
     * **PDF Processing:** If `business_goal.pdf_file` exists:
         * Use `PyPDF2` or `pdfplumber` to extract text content from the PDF.
         * Concatenate PDF text with `business_goal.description`.
+    * **Vector-Enhanced Context Retrieval:**
+        * Generate embedding for the business goal description.
+        * Find similar past business goals using FAISS vector search.
+        * Retrieve their successful recommendations and outcomes.
+        * Find related capabilities that might be impacted.
     * **Prompt Engineering:** This is critical.
-        * **Instruction:** "You are a highly skilled business architect AI. Analyze the provided business goal in the context of the current business capabilities. Recommend changes to the capability map (add, modify, delete, strengthen, merge, split) to achieve this goal. Provide recommendations in a structured JSON format."
+        * **Instruction:** "You are a highly skilled business architect AI. Analyze the provided business goal in the context of the current business capabilities and similar past goals. Recommend changes to the capability map (add, modify, delete, strengthen, merge, split) to achieve this goal. Provide recommendations in a structured JSON format."
         * **Current Capability Map Context:** Include the *entire* current capability map (serialized to JSON) for the LLM to understand the existing landscape.
+        * **Similar Goals Context:** Include 3-5 most similar past business goals and their successful recommendations.
+        * **Related Capabilities:** Include capabilities that are semantically similar to the goal.
         * **Business Goal:** Provide the extracted text from the `BusinessGoal` object.
         * **Desired JSON Output Format (Crucial for parsing!):**
             ```json
             {
               "summary_of_impact": "Overall summary of how goals impact capabilities.",
+              "similar_goals_insights": "Key insights from analyzing similar past goals.",
               "recommendations": [
                 {
                   "type": "ADD_CAPABILITY", // or MODIFY_CAPABILITY, DELETE_CAPABILITY, etc.
                   "rationale": "Explanation for this recommendation.",
+                  "confidence_score": 0.85, // 0-1 confidence based on similar past successes
                   "details": {
                     // For ADD_CAPABILITY:
                     "proposed_name": "New Capability Name",
                     "proposed_description": "Description...",
                     "proposed_parent_name": "Existing Parent Capability Name (or null for top-level)"
                   }
-                },
-                {
-                  "type": "MODIFY_CAPABILITY",
-                  "rationale": "Explanation...",
-                  "details": {
-                    "target_capability_name": "Existing Capability Name",
-                    "updates": {
-                      "name": "New Name (optional)",
-                      "description": "New Description (optional)",
-                      "parent_name": "New Parent Name (optional)"
-                    }
-                  }
-                },
-                // ... other types like DELETE, STRENGTHEN, MERGE, SPLIT with relevant details
+                }
+                // ... other types with confidence scores
               ]
             }
             ```
@@ -182,10 +244,44 @@ The application revolves around two primary entities: **Business Capabilities** 
         * Attempt to parse the LLM's `text` response as JSON. Implement robust error handling for malformed JSON.
         * Iterate through the `recommendations` array from the parsed JSON.
         * For each recommendation, create a new `CapabilityRecommendation` object in the database.
+        * **Vector Storage:** Generate and store embeddings for new recommendations in FAISS.
         * **Crucial:** When the LLM references existing capabilities by *name*, retrieve their `id` from the database to correctly link `target_capability` foreign keys. If a name doesn't match an existing capability, flag it or handle it as an error.
     * Update `BusinessGoal.status` to `ANALYZED`.
 
-**2.3. Capability Map Update Logic (`api/recommendations/<id>/apply/`):**
+**2.3. Vector Database Integration (FAISS Implementation):**
+
+* **Vector Manager Service (`core/services/vector_manager.py`):**
+    * **Initialization:**
+        * Load existing FAISS indexes on startup or create new ones.
+        * Initialize embedding model (Gemini embedding API).
+        * Set up index mappings and metadata storage.
+    * **Embedding Generation:**
+        * `generate_embedding(text)`: Use Gemini embedding API to create 768-dimensional vectors.
+        * Handle text preprocessing (cleaning, truncation to token limits).
+        * Implement caching for frequently embedded content.
+    * **FAISS Operations:**
+        * `add_to_index(content_type, object_id, text)`: Generate embedding and add to appropriate FAISS index.
+        * `search_similar(content_type, query_text, k=5, threshold=0.7)`: Find similar items with similarity scores.
+        * `update_embedding(content_type, object_id, new_text)`: Update existing vector.
+        * `remove_from_index(content_type, object_id)`: Remove vector when object is deleted.
+    * **Index Management:**
+        * Separate FAISS indexes for capabilities, business goals, and recommendations.
+        * Periodic index optimization and cleanup.
+        * Backup and restore functionality.
+
+* **Model Signal Handlers:**
+    * **Auto-Embedding:** Automatically generate and store embeddings when objects are created/updated:
+        * `Capability` save signal → generate embedding from name + description
+        * `BusinessGoal` save signal → generate embedding from title + description
+        * `CapabilityRecommendation` save signal → generate embedding from recommendation details
+    * **Auto-Cleanup:** Remove embeddings when objects are deleted.
+
+* **Vector Search API Views:**
+    * Implement semantic search endpoints for each content type.
+    * Return results with similarity scores and relevance ranking.
+    * Support filtering and pagination for search results.
+
+**2.4. Capability Map Update Logic (`api/recommendations/<id>/apply/`):**
 
 * When a user "applies" a recommendation:
     * Retrieve the `CapabilityRecommendation` object.
@@ -197,6 +293,7 @@ The application revolves around two primary entities: **Business Capabilities** 
         * **MERGE_CAPABILITIES:** Identify two capabilities to merge, create a new one, move children/associations, and deprecate the original two. (Complex, potentially beyond "minimal" for V1).
         * **SPLIT_CAPABILITY:** Identify one capability, create new ones, and deprecate the original. (Complex, potentially beyond "minimal" for V1).
     * Set `CapabilityRecommendation.status` to `APPLIED` and `applied_at` timestamp.
+    * **Update Vector Indexes:** When capabilities are modified/added/deleted, update corresponding FAISS embeddings.
     * Implement database transactions for atomicity for complex operations.
 
 ---
@@ -212,6 +309,7 @@ The application revolves around two primary entities: **Business Capabilities** 
         * "Business Capability Map" (view/edit capabilities)
         * "Submit Business Goals"
         * "Analyze Goals & Recommendations"
+        * "Semantic Search" (vector-powered search across all content)
         * "Ask AI" (general Q&A)
 
 **3.2. Key Components & Pages:**
@@ -219,42 +317,71 @@ The application revolves around two primary entities: **Business Capabilities** 
 * **A. `CapabilityMapViewer.jsx` (Business Capability Map Page):**
     * **Visualization:** Display capabilities in a hierarchical, tree-like structure. Shadcn `Tree` or custom nested `Card` components.
     * Each capability node should be clickable to view/edit details.
+    * **Enhanced Search Features:**
+        * **Semantic Search Bar:** Input field that uses vector search to find capabilities by meaning, not just keywords.
+        * **"Find Similar" Button:** For each capability, show similar capabilities using vector search.
+        * **Duplicate Detection:** Highlight potentially duplicate capabilities found via similarity search.
     * **CRUD Operations:**
         * **Add Capability:** Button to open a Shadcn `Dialog` with a `Form` for new capability details (name, description, parent dropdown, importance, status).
         * **Edit Capability:** Clicking a capability opens a `Dialog` with its details pre-filled for editing.
         * **Delete Capability:** Button within the edit dialog or on the node itself, with a confirmation `AlertDialog`.
-    * **Filtering/Search (Optional):** Input fields to filter capabilities by name, status, importance.
+    * **Filtering/Search:** Input fields to filter capabilities by name, status, importance, plus semantic search.
 * **B. `GoalSubmissionForm.jsx` (Submit Business Goals Page):**
     * Shadcn `Form` component.
     * **Fields:**
         * `title` (Input)
         * `description` (Textarea)
         * `pdf_file` (Input type="file")
+    * **Smart Suggestions:** As user types description, show similar past goals using vector search.
     * **Submission Button:** Triggers `POST` request to `api/business-goals/`.
     * Loading state indication.
 * **C. `GoalAnalysisAndRecommendations.jsx` (Analyze Goals & Recommendations Page):**
     * **List Goals:** Display a `Table` of all submitted `BusinessGoal`s, showing `title`, `submitted_at`, and `status`.
     * **"Analyze" Button:** For goals with `PENDING_ANALYSIS` status, a button to trigger `POST` to `api/business-goals/<id>/analyze/`. Show loading state.
+    * **Similar Goals Section:** For each goal, show similar past goals with their outcomes.
     * **View Recommendations:** For `ANALYZED` goals, a button to navigate to `RecommendationList.jsx` or expand within the table.
     * **Recommendation List (within this component or separate `RecommendationList.jsx`):**
         * Display `CapabilityRecommendation`s as a list or `Card`s.
-        * Each recommendation card should show: `recommendation_type`, `details` (parsed JSON), `rationale`, `status`.
+        * Each recommendation card should show: `recommendation_type`, `details` (parsed JSON), `rationale`, `status`, `confidence_score`.
+        * **Similar Recommendations:** Show similar past recommendations and their success rates.
         * **Action Buttons:** For `PENDING` recommendations:
             * `Apply` Button (Shadcn `Button`): Triggers `POST` to `api/recommendations/<id>/apply/`. Show loading state.
             * `Reject` Button (Shadcn `Button`): Updates `CapabilityRecommendation.status` to `REJECTED` via `PATCH` request.
-* **D. `LLMQueryInterface.jsx` (Ask AI Page):**
-    * **Chat-like Interface:**
+* **D. `SemanticSearchPage.jsx` (New Vector Search Page):**
+    * **Universal Search Interface:**
+        * Single search input that searches across capabilities, goals, and recommendations.
+        * Tabbed results showing different content types.
+        * Similarity scores and relevance indicators.
+    * **Advanced Search Options:**
+        * Filter by content type (capabilities, goals, recommendations).
+        * Adjust similarity threshold.
+        * Date range filters.
+    * **Search Results:**
+        * Highlighted matching text.
+        * Links to original items.
+        * Contextual information and similarity explanations.
+* **E. `LLMQueryInterface.jsx` (Ask AI Page):**
+    * **Enhanced Chat-like Interface:**
         * Input field (Shadcn `Input` or `Textarea`) for user queries.
         * Send button.
         * Display area for previous queries and AI responses (e.g., using `Card` components for chat bubbles).
+        * **Context Indicators:** Show when AI is using vector search results to enhance answers.
+    * **Smart Context:** Automatically include relevant similar content from vector search.
     * Loading indicator when AI is thinking.
     * Calls `POST` to `api/llm/query/`.
 
-**3.3. State Management:**
+**3.3. Enhanced UI Components:**
+
+* **`SimilarityIndicator.jsx`:** Component to show similarity scores and relevance.
+* **`VectorSearchInput.jsx`:** Reusable semantic search input component.
+* **`RecommendationConfidence.jsx`:** Display confidence scores for recommendations.
+* **`ContextualResults.jsx`:** Show related items found via vector search.
+
+**3.4. State Management:**
 
 * For a minimal application, React Context API or a lightweight library like Zustand or Jotai is recommended for global state (e.g., currently loaded capabilities, user authentication if added later, loading states).
 
-**3.4. API Interaction:**
+**3.5. API Interaction:**
 
 * Use `fetch` API or `axios` for all backend API calls.
 * Handle loading states and error states for all API interactions.
@@ -466,6 +593,77 @@ Get all descendant capabilities.
 curl -X GET "http://localhost:8000/api/capabilities/68b89725-0334-4b4d-aa58-67007878c3bb/descendants/"
 ```
 
+#### **GET /api/capabilities/{id}/similar/**
+Find similar capabilities using vector search.
+
+**Query Parameters:**
+- `limit` - Number of similar capabilities to return (default: 5, max: 20)
+- `threshold` - Similarity threshold (0.0-1.0, default: 0.7)
+
+**Example Request:**
+```bash
+curl -X GET "http://localhost:8000/api/capabilities/68b89725-0334-4b4d-aa58-67007878c3bb/similar/?limit=3&threshold=0.8"
+```
+
+**Example Response:**
+```json
+{
+  "similar_capabilities": [
+    {
+      "id": "similar-uuid-1",
+      "name": "Customer Service Management",
+      "description": "Managing customer support and service delivery...",
+      "similarity_score": 0.89,
+      "full_path": "Customer Operations > Customer Service Management"
+    },
+    {
+      "id": "similar-uuid-2", 
+      "name": "Customer Experience Design",
+      "description": "Designing and optimizing customer experience journeys...",
+      "similarity_score": 0.83,
+      "full_path": "Customer Operations > Customer Experience Design"
+    }
+  ],
+  "query_capability": {
+    "id": "68b89725-0334-4b4d-aa58-67007878c3bb",
+    "name": "Customer Relationship Management"
+  }
+}
+```
+
+#### **POST /api/capabilities/search/**
+Semantic search across all capabilities using vector similarity.
+
+**Example Request:**
+```bash
+curl -X POST "http://localhost:8000/api/capabilities/search/" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "customer satisfaction and retention strategies",
+    "limit": 10,
+    "threshold": 0.6
+  }'
+```
+
+**Example Response:**
+```json
+{
+  "results": [
+    {
+      "id": "uuid-1",
+      "name": "Customer Retention Programs",
+      "description": "Development and management of customer loyalty programs...",
+      "similarity_score": 0.92,
+      "full_path": "Customer Operations > Customer Retention Programs",
+      "strategic_importance": "HIGH"
+    }
+  ],
+  "query": "customer satisfaction and retention strategies",
+  "total_results": 5,
+  "search_time_ms": 45
+}
+```
+
 ### **5.3. Business Goals Management API**
 
 #### **GET /api/business-goals/**
@@ -605,6 +803,80 @@ Get all recommendations for a specific business goal.
 curl -X GET "http://localhost:8000/api/business-goals/0bdb7723-d885-4fc3-9f77-14cefab997d9/recommendations/"
 ```
 
+#### **GET /api/business-goals/{id}/similar/**
+Find similar business goals using vector search to provide analysis context.
+
+**Query Parameters:**
+- `limit` - Number of similar goals to return (default: 5, max: 10)
+- `threshold` - Similarity threshold (0.0-1.0, default: 0.7)
+- `include_outcomes` - Include recommendation outcomes (default: true)
+
+**Example Request:**
+```bash
+curl -X GET "http://localhost:8000/api/business-goals/0bdb7723-d885-4fc3-9f77-14cefab997d9/similar/?limit=3&include_outcomes=true"
+```
+
+**Example Response:**
+```json
+{
+  "similar_goals": [
+    {
+      "id": "similar-goal-uuid-1",
+      "title": "Modernize Customer Service Operations",
+      "description": "Transform customer service through digital channels...",
+      "similarity_score": 0.91,
+      "status": "RECOMMENDATIONS_APPLIED",
+      "successful_recommendations": 4,
+      "submitted_at": "2024-01-15T10:30:00Z",
+      "outcomes": {
+        "capabilities_added": 2,
+        "capabilities_modified": 1,
+        "success_rate": 0.89
+      }
+    }
+  ],
+  "query_goal": {
+    "id": "0bdb7723-d885-4fc3-9f77-14cefab997d9",
+    "title": "Digital Transformation of Sales Process"
+  }
+}
+```
+
+#### **POST /api/business-goals/search/**
+Semantic search across business goals.
+
+**Example Request:**
+```bash
+curl -X POST "http://localhost:8000/api/business-goals/search/" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "digital transformation and automation",
+    "limit": 8,
+    "threshold": 0.65,
+    "status_filter": ["ANALYZED", "RECOMMENDATIONS_APPLIED"]
+  }'
+```
+
+**Example Response:**
+```json
+{
+  "results": [
+    {
+      "id": "uuid-1",
+      "title": "Automate Financial Reporting Process",
+      "description": "Implement automated reporting systems to reduce manual work...",
+      "similarity_score": 0.87,
+      "status": "ANALYZED",
+      "recommendations_count": 3,
+      "submitted_at": "2024-02-01T14:20:00Z"
+    }
+  ],
+  "query": "digital transformation and automation",
+  "total_results": 4,
+  "search_time_ms": 52
+}
+```
+
 ### **5.4. Recommendations Management API**
 
 #### **GET /api/recommendations/**
@@ -709,6 +981,88 @@ curl -X POST "http://localhost:8000/api/recommendations/d52ee02d-0e97-4fb9-81f6-
 }
 ```
 
+#### **GET /api/recommendations/{id}/similar/**
+Find similar past recommendations for validation and improvement suggestions.
+
+**Query Parameters:**
+- `limit` - Number of similar recommendations to return (default: 5, max: 10)
+- `threshold` - Similarity threshold (0.0-1.0, default: 0.75)
+- `include_outcomes` - Include application outcomes (default: true)
+
+**Example Request:**
+```bash
+curl -X GET "http://localhost:8000/api/recommendations/1b236e29-c9e0-49e0-9b82-0e6a14aa3d55/similar/?limit=3&include_outcomes=true"
+```
+
+**Example Response:**
+```json
+{
+  "similar_recommendations": [
+    {
+      "id": "similar-rec-uuid-1",
+      "recommendation_type": "ADD_CAPABILITY",
+      "proposed_name": "Digital Customer Portal",
+      "similarity_score": 0.88,
+      "status": "APPLIED",
+      "business_goal_title": "Enhance Customer Self-Service",
+      "applied_at": "2024-01-20T15:45:00Z",
+      "outcome": {
+        "success": true,
+        "impact_rating": "HIGH",
+        "implementation_notes": "Successfully improved customer satisfaction by 25%"
+      }
+    }
+  ],
+  "query_recommendation": {
+    "id": "1b236e29-c9e0-49e0-9b82-0e6a14aa3d55",
+    "recommendation_type": "ADD_CAPABILITY",
+    "proposed_name": "Digital Sales Tools"
+  },
+  "success_patterns": {
+    "similar_recommendations_success_rate": 0.85,
+    "common_success_factors": ["Clear scope definition", "Stakeholder buy-in"]
+  }
+}
+```
+
+#### **POST /api/recommendations/search/**
+Semantic search across capability recommendations.
+
+**Example Request:**
+```bash
+curl -X POST "http://localhost:8000/api/recommendations/search/" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "automation and efficiency improvements",
+    "limit": 8,
+    "threshold": 0.7,
+    "type_filter": ["ADD_CAPABILITY", "MODIFY_CAPABILITY"],
+    "status_filter": ["APPLIED"]
+  }'
+```
+
+**Example Response:**
+```json
+{
+  "results": [
+    {
+      "id": "uuid-1",
+      "recommendation_type": "ADD_CAPABILITY",
+      "proposed_name": "Process Automation Engine",
+      "proposed_description": "Automated workflow management system...",
+      "similarity_score": 0.91,
+      "status": "APPLIED",
+      "business_goal_title": "Streamline Operations",
+      "confidence_score": 0.89,
+      "applied_at": "2024-01-15T10:30:00Z"
+    }
+  ],
+  "query": "automation and efficiency improvements",
+  "total_results": 6,
+  "search_time_ms": 38
+}
+```
+
 ### **5.5. AI Assistant API**
 
 #### **POST /api/llm/query/**
@@ -744,11 +1098,118 @@ curl -X POST "http://localhost:8000/api/llm/query/" \
 {
   "answer": "Based on your current capability map, key capabilities for digital transformation include:\n\n* **AI-Powered Analytics:** Drives data-driven decisions and automation.\n* **Customer Relationship Management:** Optimizes customer experience in the digital realm...",
   "query": "What are the key capabilities for digital transformation?",
-  "context_used": "Current Business Capability Map Summary:\n• AI-Powered Analytics: Advanced analytics and machine learning capabilities..."
+  "context_used": "Current Business Capability Map Summary:\n• AI-Powered Analytics: Advanced analytics and machine learning capabilities...",
+  "vector_context": {
+    "similar_capabilities": [
+      {
+        "name": "Data Analytics Platform",
+        "similarity_score": 0.89,
+        "relevance": "Highly relevant for digital transformation analytics needs"
+      }
+    ],
+    "similar_goals": [
+      {
+        "title": "Implement Data-Driven Decision Making",
+        "similarity_score": 0.85,
+        "outcome": "Successfully implemented analytics capabilities"
+      }
+    ],
+    "context_enhancement": "Enhanced with 3 similar capabilities and 2 related past goals"
+  }
 }
 ```
 
-### **5.6. Error Responses**
+### **5.6. Vector Database Management API**
+
+#### **GET /api/vectors/status/**
+Get the current status and health of all FAISS vector indexes.
+
+**Example Request:**
+```bash
+curl -X GET "http://localhost:8000/api/vectors/status/"
+```
+
+**Example Response:**
+```json
+{
+  "indexes": {
+    "capabilities": {
+      "total_vectors": 245,
+      "index_size_mb": 12.3,
+      "last_updated": "2024-06-04T16:45:00Z",
+      "health": "healthy"
+    },
+    "business_goals": {
+      "total_vectors": 89,
+      "index_size_mb": 4.7,
+      "last_updated": "2024-06-04T15:30:00Z",
+      "health": "healthy"
+    },
+    "recommendations": {
+      "total_vectors": 156,
+      "index_size_mb": 8.1,
+      "last_updated": "2024-06-04T16:20:00Z",
+      "health": "healthy"
+    }
+  },
+  "overall_health": "healthy",
+  "embedding_model": "text-embedding-004",
+  "vector_dimension": 768,
+  "total_storage_mb": 25.1
+}
+```
+
+#### **POST /api/vectors/rebuild/**
+Rebuild all FAISS indexes from scratch (admin operation).
+
+**Prerequisites:** Admin permissions required
+
+**Example Request:**
+```bash
+curl -X POST "http://localhost:8000/api/vectors/rebuild/" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "indexes": ["capabilities", "business_goals", "recommendations"],
+    "force": false
+  }'
+```
+
+**Example Response:**
+```json
+{
+  "status": "rebuild initiated",
+  "job_id": "rebuild-2024-06-04-16-50-123",
+  "estimated_completion": "2024-06-04T17:05:00Z",
+  "indexes_to_rebuild": ["capabilities", "business_goals", "recommendations"],
+  "total_items_to_process": 490
+}
+```
+
+#### **POST /api/vectors/optimize/**
+Optimize FAISS indexes for better search performance.
+
+**Example Request:**
+```bash
+curl -X POST "http://localhost:8000/api/vectors/optimize/" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "index_type": "capabilities",
+    "optimization_level": "standard"
+  }'
+```
+
+**Response:**
+```json
+{
+  "status": "optimization complete",
+  "index_type": "capabilities",
+  "performance_improvement": "15%",
+  "new_search_time_ms": 23,
+  "previous_search_time_ms": 27
+}
+```
+
+### **5.7. Error Responses**
 
 All API endpoints return consistent error responses:
 
@@ -785,7 +1246,7 @@ All API endpoints return consistent error responses:
 }
 ```
 
-### **5.7. File Upload Specifications**
+### **5.8. File Upload Specifications**
 
 **Supported File Types:** PDF only
 **Maximum File Size:** 10MB
@@ -815,7 +1276,7 @@ ls -lh /path/to/document.pdf
 file /path/to/document.pdf
 ```
 
-### **5.8. API Rate Limiting & Performance**
+### **5.9. API Rate Limiting & Performance**
 
 **Current Configuration:**
 - No rate limiting (development)
@@ -828,7 +1289,7 @@ file /path/to/document.pdf
 - Add caching for frequently accessed data
 - Monitor API performance and add alerts
 
-### **5.9. Quick Reference & Testing Commands**
+### **5.10. Quick Reference & Testing Commands**
 
 **Setup Commands:**
 ```bash
@@ -872,6 +1333,26 @@ curl -X GET "http://localhost:8000/api/business-goals/$GOAL_ID/recommendations/"
 curl -X POST "http://localhost:8000/api/llm/query/" \
   -H "Content-Type: application/json" \
   -d '{"query": "What is the relationship between Product Management and Customer Acquisition in our capability map?"}'
+```
+
+**Vector Search Testing:**
+```bash
+# Test capability semantic search
+curl -X POST "http://localhost:8000/api/capabilities/search/" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "customer service and support operations", "limit": 5}'
+
+# Test business goal similarity
+GOAL_ID=$(curl -s -X GET "http://localhost:8000/api/business-goals/" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+curl -X GET "http://localhost:8000/api/business-goals/$GOAL_ID/similar/?limit=3"
+
+# Test recommendation patterns
+curl -X POST "http://localhost:8000/api/recommendations/search/" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "digital transformation capabilities", "limit": 5, "status_filter": ["APPLIED"]}'
+
+# Check vector database status
+curl -X GET "http://localhost:8000/api/vectors/status/"
 ```
 
 **API Health Check:**
@@ -953,6 +1434,14 @@ curl -s http://localhost:8000/api/capabilities/ > capabilities.json
    * Add recommendation generation logic
    * Implement recommendation application logic
 
+4. **Vector Database Integration (FAISS)**
+   * Install and configure FAISS dependencies
+   * Implement VectorManager service class
+   * Create VectorEmbedding model and migrations
+   * Set up automatic embedding generation via model signals
+   * Implement vector search API endpoints
+   * Add vector-enhanced LLM context retrieval
+
 #### Phase 3: Frontend Implementation (Week 3)
 
 1. **Core Components**
@@ -962,41 +1451,57 @@ curl -s http://localhost:8000/api/capabilities/ > capabilities.json
    * Implement API integration layer
 
 2. **Feature Pages**
-   * Build Capability Map viewer
-   * Create Goal submission form
-   * Implement Goal analysis interface
-   * Build Recommendation management UI
-   * Create AI Q&A interface
+   * Build Capability Map viewer with semantic search
+   * Create Goal submission form with smart suggestions
+   * Implement Goal analysis interface with similar goals display
+   * Build Recommendation management UI with confidence scores
+   * Create AI Q&A interface with vector-enhanced context
+   * Implement SemanticSearchPage for cross-content search
 
-3. **UI/UX Refinement**
-   * Add loading states
+3. **Vector-Enhanced UI Components**
+   * SimilarityIndicator for displaying relevance scores
+   * VectorSearchInput for semantic search functionality
+   * RecommendationConfidence for showing AI confidence
+   * ContextualResults for displaying related items
+   * Smart suggestions and auto-complete features
+
+4. **UI/UX Refinement**
+   * Add loading states for vector search operations
    * Implement error handling
    * Add success/error notifications
    * Improve responsive design
    * Add animations and transitions
 
-#### Phase 4: Testing & Refinement (Week 4)
+#### Phase 4: Testing & Vector Optimization (Week 4)
 
 1. **Backend Testing**
    * Write unit tests for models
-   * Test API endpoints
-   * Validate LLM integration
+   * Test API endpoints including vector search
+   * Validate LLM integration with vector context
    * Test PDF processing
-   * Add integration tests
+   * Add integration tests for FAISS operations
+   * Test vector embedding generation and similarity search
 
 2. **Frontend Testing**
-   * Test components
-   * Validate form submissions
-   * Test API integration
-   * Add end-to-end tests
+   * Test components including vector search UI
+   * Validate form submissions with smart suggestions
+   * Test API integration for semantic search
+   * Add end-to-end tests for vector-enhanced workflows
    * Test responsive design
 
-3. **Documentation & Deployment**
-   * Write API documentation
-   * Create user documentation
+3. **Vector Database Optimization**
+   * Optimize FAISS index performance
+   * Test similarity thresholds and relevance scoring
+   * Validate embedding quality and search accuracy
+   * Implement index backup and recovery
+   * Performance testing for large datasets
+
+4. **Documentation & Deployment**
+   * Write API documentation including vector endpoints
+   * Create user documentation for semantic search features
    * Set up deployment configuration
    * Prepare deployment scripts
-   * Create README files
+   * Create README files with FAISS setup instructions
 
 #### Phase 5: Launch & Monitoring (Week 5)
 

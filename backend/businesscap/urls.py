@@ -22,7 +22,11 @@ from rest_framework.routers import DefaultRouter
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
-from core.views import CapabilityViewSet, BusinessGoalViewSet, CapabilityRecommendationViewSet, LLMQueryView
+from core.views import (
+    CapabilityViewSet, BusinessGoalViewSet, CapabilityRecommendationViewSet, 
+    LLMQueryView, VectorSearchAPIView, SimilarObjectsAPIView, 
+    VectorManagementAPIView
+)
 
 # API Documentation setup
 schema_view = get_schema_view(
@@ -59,10 +63,29 @@ router.register(r'recommendations', CapabilityRecommendationViewSet)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/', include(router.urls)),
+    
+    # Vec search
+    path('api/capabilities/search/', VectorSearchAPIView.as_view(), {'content_type': 'capabilities'}, name='capability-search'),
+    path('api/business-goals/search/', VectorSearchAPIView.as_view(), {'content_type': 'business_goals'}, name='business-goal-search'),
+    path('api/recommendations/search/', VectorSearchAPIView.as_view(), {'content_type': 'recommendations'}, name='recommendation-search'),
+    
+    # Similar objects
+    path('api/capabilities/<uuid:object_id>/similar/', SimilarObjectsAPIView.as_view(), {'content_type': 'capabilities'}, name='capability-similar'),
+    path('api/business-goals/<uuid:object_id>/similar/', SimilarObjectsAPIView.as_view(), {'content_type': 'business_goals'}, name='business-goal-similar'),
+    path('api/recommendations/<uuid:object_id>/similar/', SimilarObjectsAPIView.as_view(), {'content_type': 'recommendations'}, name='recommendation-similar'),
+    
+    # LLM and AI
     path('api/llm/query/', LLMQueryView.as_view(), name='llm-query'),
     
-    # API Documentation - Swagger UI only
+    # Vector management
+    path('api/vectors/status/', VectorManagementAPIView.as_view(), name='vector-status'),
+    path('api/vectors/rebuild/', VectorManagementAPIView.as_view(), name='vector-rebuild'),
+    path('api/vectors/optimize/', VectorManagementAPIView.as_view(), name='vector-optimize'),
+    
+    # DRF router
+    path('api/', include(router.urls)),
+    
+    # API Documentation
     path('swagger<format>/', schema_view.without_ui(cache_timeout=0), name='schema-json'),
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
     path('', schema_view.with_ui('swagger', cache_timeout=0), name='api-root'),  # Default to Swagger

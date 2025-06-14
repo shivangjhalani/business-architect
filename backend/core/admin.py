@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import Capability, BusinessGoal, CapabilityRecommendation
+from .models import Capability, BusinessGoal, CapabilityRecommendation, VectorEmbedding
 
 
 @admin.register(Capability)
@@ -127,6 +127,53 @@ class CapabilityRecommendationAdmin(admin.ModelAdmin):
             'target_capability', 
             'proposed_parent'
         )
+
+
+@admin.register(VectorEmbedding)
+class VectorEmbeddingAdmin(admin.ModelAdmin):
+    list_display = [
+        'content_type', 
+        'object_id', 
+        'embedding_model',
+        'vector_index',
+        'get_related_object_name',
+        'created_at',
+        'updated_at'
+    ]
+    list_filter = ['content_type', 'embedding_model', 'created_at']
+    search_fields = ['object_id', 'text_content']
+    ordering = ['-created_at']
+    
+    fieldsets = (
+        ('Vector Information', {
+            'fields': ('content_type', 'object_id', 'vector_index')
+        }),
+        ('Embedding Details', {
+            'fields': ('embedding_model', 'text_content'),
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    readonly_fields = ['created_at', 'updated_at', 'vector_index']
+    
+    def get_related_object_name(self, obj):
+        """Display the name/title of the related object."""
+        related_obj = obj.related_object
+        if related_obj:
+            if hasattr(related_obj, 'name'):
+                return related_obj.name
+            elif hasattr(related_obj, 'title'):
+                return related_obj.title
+            else:
+                return str(related_obj)
+        return "Object not found"
+    get_related_object_name.short_description = "Related Object"
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request)
 
 
 # Admin site customization

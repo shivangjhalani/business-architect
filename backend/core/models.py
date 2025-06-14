@@ -360,7 +360,7 @@ class CapabilityRecommendation(models.Model):
         ordering = ['-recommended_by_ai_at']
         constraints = [
             models.CheckConstraint(
-                check=models.Q(status='PENDING') | models.Q(applied_at__isnull=False),
+                check=models.Q(status='PENDING') | models.Q(status='REJECTED') | models.Q(applied_at__isnull=False),
                 name='applied_recommendations_have_timestamp'
             ),
         ]
@@ -433,3 +433,103 @@ class CapabilityRecommendation(models.Model):
             return f"Strengthen capability: {self.target_capability.name}"
         else:
             return f"{self.get_recommendation_type_display()}"
+
+
+class VectorEmbedding(models.Model):
+    """
+    Stores metadata for vector embeddings used in FAISS similarity search.
+    The actual vector data is stored in FAISS indexes on disk.
+    """
+    
+    # Content type choices for what kind of object this embedding represents
+    CONTENT_TYPE_CHOICES = [
+        ('CAPABILITY', 'Capability'),
+        ('BUSINESS_GOAL', 'Business Goal'),
+        ('RECOMMENDATION', 'Recommendation'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    content_type = models.CharField(
+        max_length=20,
+        choices=CONTENT_TYPE_CHOICES,
+        help_text="Type of content this embedding represents"
+    )
+    object_id = models.UUIDField(
+        help_text="UUID of the related object (Capability, BusinessGoal, or CapabilityRecommendation)"
+    )
+    embedding_model = models.CharField(
+        max_length=100,
+        default='text-embedding-004',
+        help_text="Model used to generate the embedding"
+    )
+    vector_index = models.IntegerField(
+        help_text="Index position in the FAISS vector store"
+    )
+    text_content = models.TextField(
+        help_text="The original text content that was embedded"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Vector Embedding"
+        verbose_name_plural = "Vector Embeddings"
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['content_type', 'object_id'],
+                name='unique_embedding_per_object'
+            ),
+            models.UniqueConstraint(
+                fields=['content_type', 'vector_index'],
+                name='unique_vector_index_per_content_type'
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['content_type', 'object_id']),
+            models.Index(fields=['content_type', 'vector_index']),
+            models.Index(fields=['embedding_model']),
+        ]
+
+    def __str__(self):
+        return f"{self.get_content_type_display()} embedding for {self.object_id}"
+
+    def clean(self):
+        """Custom validation for the model."""
+        super().clean()
+        
+        # Validate that the referenced object exists
+        if self.content_type == 'CAPABILITY':
+            if not Capability.objects.filter(id=self.object_id).exists():
+                raise ValidationError(f"Capability with id {self.object_id} does not exist.")
+        elif self.content_type == 'BUSINESS_GOAL':
+            if not BusinessGoal.objects.filter(id=self.object_id).exists():
+                raise ValidationError(f"BusinessGoal with id {self.object_id} does not exist.")
+        elif self.content_type == 'RECOMMENDATION':
+            if not CapabilityRecommendation.objects.filter(id=self.object_id).exists():
+                raise ValidationError(f"CapabilityRecommendation with id {self.object_id} does not exist.")
+
+    @property
+    def related_object(self):
+        """Get the related object (Capability, BusinessGoal, or CapabilityRecommendation)."""
+        try:
+            if self.content_type == 'CAPABILITY':
+                return Capability.objects.get(id=self.object_id)
+            elif self.content_type == 'BUSINESS_GOAL':
+                return BusinessGoal.objects.get(id=self.object_id)
+            elif self.content_type == 'RECOMMENDATION':
+                return CapabilityRecommendation.objects.get(id=self.object_id)
+        except (Capability.DoesNotExist, BusinessGoal.DoesNotExist, CapabilityRecommendation.DoesNotExist):
+            return None
+
+    def get_display_text(self):
+        """Get a human-readable representation of the embedded content."""
+        obj = self.related_object
+        if obj:
+            if self.content_type == 'CAPABILITY':
+                return f"{obj.name}: {obj.description[:100]}..."
+            elif self.content_type == 'BUSINESS_GOAL':
+                return f"{obj.title}: {obj.description[:100]}..."
+            elif self.content_type == 'RECOMMENDATION':
+                return f"{obj.get_recommendation_type_display()}: {obj.proposed_name or obj.additional_details[:100]}..."
+        return "Related object not found"

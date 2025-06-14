@@ -29,7 +29,11 @@ SECRET_KEY = 'django-insecure-qklck!et6qvyoi!s*p&4f@xg01&%lnj0h=y=^a_=ahr7&+$$-z
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    'testserver',
+]
 
 
 # Application definition
@@ -86,7 +90,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'business_cap',
         'USER': 'postgres',
-        'PASSWORD': os.getenv('DB_PASSWORD'),  # Update with your actual password
+        'PASSWORD': os.getenv('DB_PASSWORD'),
         'HOST': 'localhost',
         'PORT': '5432',
     }
@@ -140,12 +144,12 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS settings
-CORS_ALLOW_ALL_ORIGINS = True  # Only for development
+CORS_ALLOW_ALL_ORIGINS = True # For now, not like this in production
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # React development server
+    "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "http://localhost:5173",  # Vite development server
+    "http://localhost:5173", # vite
     "http://127.0.0.1:5173",
 ]
 
@@ -163,14 +167,14 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.BrowsableAPIRenderer',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',  # For development, change in production
+        'rest_framework.permissions.AllowAny',  # For now, not like this in production
     ],
     'EXCEPTION_HANDLER': 'core.exceptions.custom_exception_handler',
 }
 
 # File upload settings
-FILE_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10MB
-DATA_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10485760 # inc from 2.5 to 10MB
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10485760
 FILE_UPLOAD_PERMISSIONS = 0o644
 
 # Logging configuration
@@ -241,7 +245,7 @@ SWAGGER_SETTINGS = {
 # Environment variables
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if not GEMINI_API_KEY:
-    print("Warning: GEMINI_API_KEY not set. AI features will not work.")
+    print("GEMINI_API_KEY not set!!!!!")
 
 # Create logs directory if it doesn't exist
 logs_dir = os.path.join(BASE_DIR, 'logs')

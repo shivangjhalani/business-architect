@@ -1,6 +1,5 @@
 import { ReactNode } from "react"
 import { Link, useLocation } from "react-router-dom"
-import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Toaster } from "@/components/ui/sonner"
@@ -14,6 +13,7 @@ const navigation = [
   { name: "Capability Map", href: "/" },
   { name: "Business Goals", href: "/goals" },
   { name: "Analysis", href: "/analysis" },
+  { name: "AI Assistant", href: "/assistant" },
 ]
 
 export function MainLayout({ children }: MainLayoutProps) {
@@ -26,7 +26,7 @@ export function MainLayout({ children }: MainLayoutProps) {
         <div className="container flex h-16 items-center px-4">
           <div className="flex items-center space-x-2">
             <div className="h-8 w-8 rounded-lg bg-primary"></div>
-            <h1 className="text-xl font-bold">Business Capability Map</h1>
+            <h1 className="text-xl font-bold">Business Architect</h1>
           </div>
         </div>
       </header>
