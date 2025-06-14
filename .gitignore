@@ -9,6 +9,13 @@ backend/venv/
 dist/
 build/
 *.egg
+*.whl
+.tox/
+.coverage
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
 # Node
 node_modules/
@@ -31,6 +38,11 @@ yarn-error.log*
 
 # Project specific
 pgdata/
+pg_socket/
+*.sql
+*.dump
+
+# Logs
 *.log
 .env
 .env.*
@@ -39,4 +51,7 @@ pgdata/
 # Django
 *.sqlite3
 media/
-static/ 
+static/
+# Exclude migration pyc files but keep the migration .py files
+**/migrations/__pycache__/
+**/migrations/*.pyc 
