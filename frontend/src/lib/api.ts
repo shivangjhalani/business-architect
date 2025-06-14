@@ -342,7 +342,7 @@ class ApiClient {
   }
 
   async getCapabilityRecommendations(id: string): Promise<ApiResponse<CapabilityRecommendation>> {
-    return this.request(`/capabilities/${id}/recommendations/`);
+    return this.request(`/recommendations/?target_capability=${id}`);
   }
 }
 

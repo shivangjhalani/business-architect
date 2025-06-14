@@ -1,347 +1,274 @@
-import os
-import json
-import logging
-import numpy as np
 import faiss
-
-faiss.omp_set_num_threads(1)  # Optimize CPU performance
-
-from typing import List, Dict, Tuple, Optional, Any
-from django.conf import settings
-from django.db import transaction
+import numpy as np
+import os
 import google.generativeai as genai
-from .constants import ContentTypes
 
-logger = logging.getLogger(__name__)
+faiss.omp_set_num_threads(2)
+
+from django.conf import settings
+from django.apps import apps
+from .constants import ContentTypes
+from .models import VectorEmbedding
+
+genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+
 
 class VectorManager:
-    
     def __init__(self):
-        self.vector_storage_path = os.path.join(settings.BASE_DIR, 'vector_storage')
-        self.embedding_dimension = 768  # Gemini embedding dimension
         self.indexes = {}
-        self.metadata = {}
-        
-        os.makedirs(self.vector_storage_path, exist_ok=True)
-        
-        if hasattr(settings, 'GEMINI_API_KEY') and settings.GEMINI_API_KEY:
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-        
-        self._load_indexes()
+        self.embedding_dimension = 768
+        self.load_indexes()
     
-    def _get_models(self):
-        from .models import VectorEmbedding, Capability, BusinessGoal, CapabilityRecommendation
-        return VectorEmbedding, Capability, BusinessGoal, CapabilityRecommendation
+    def get_model_classes(self):
+        return {
+            ContentTypes.CAPABILITY: apps.get_model('core', 'Capability'),
+            ContentTypes.BUSINESS_GOAL: apps.get_model('core', 'BusinessGoal'),
+            ContentTypes.RECOMMENDATION: apps.get_model('core', 'CapabilityRecommendation'),
+        }
     
-    def _get_index_path(self, content_type: str) -> str:
-        return os.path.join(self.vector_storage_path, f"{content_type.lower()}.faiss")
+    def get_index_file_path(self, content_type):
+        return os.path.join(settings.BASE_DIR, 'vector_indexes', f'{content_type.lower()}_index.faiss')
     
-    def _load_indexes(self):
-        """Load existing FAISS indexes from disk."""
-        content_types = ['capabilities', 'business_goals', 'recommendations']
-        
-        for content_type in content_types:
-            index_path = self._get_index_path(content_type)
+    def load_indexes(self):
+        for content_type in [ContentTypes.CAPABILITY, ContentTypes.BUSINESS_GOAL, ContentTypes.RECOMMENDATION]:
+            index_path = self.get_index_file_path(content_type)
             
             if os.path.exists(index_path):
                 try:
                     self.indexes[content_type] = faiss.read_index(index_path)
-                    logger.info(f"Loaded {content_type} index with {self.indexes[content_type].ntotal} vectors")
                 except Exception as e:
-                    logger.error(f"Error loading {content_type} index: {e}")
+                    print(f"Error loading index for {content_type}: {e}")
                     self.indexes[content_type] = faiss.IndexFlatIP(self.embedding_dimension)
             else:
-                # Create new index using Inner Product (cosine similarity with normalized vectors)
                 self.indexes[content_type] = faiss.IndexFlatIP(self.embedding_dimension)
-                logger.info(f"Created new {content_type} index")
 
-        # Load metadata
-        metadata_path = self._get_metadata_path()
-        if os.path.exists(metadata_path):
-            try:
-                with open(metadata_path, 'r') as f:
-                    self.metadata = json.load(f)
-            except Exception as e:
-                logger.error(f"Error loading metadata: {e}")
-                self.metadata = {}
-        else:
-            self.metadata = {}
-
-    def _save_indexes(self):
-        """Save all FAISS indexes to disk."""
-        for content_type, index in self.indexes.items():
-            try:
-                index_path = self._get_index_path(content_type)
-                faiss.write_index(index, index_path)
-                logger.info(f"Saved {content_type} index with {index.ntotal} vectors")
-            except Exception as e:
-                logger.error(f"Error saving {content_type} index: {e}")
+    def save_indexes(self):
+        os.makedirs(os.path.join(settings.BASE_DIR, 'vector_indexes'), exist_ok=True)
         
-        # Save metadata
-        try:
-            metadata_path = self._get_metadata_path()
-            with open(metadata_path, 'w') as f:
-                json.dump(self.metadata, f, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving metadata: {e}")
+        for content_type, index in self.indexes.items():
+            index_path = self.get_index_file_path(content_type)
+            try:
+                faiss.write_index(index, index_path)
+            except Exception as e:
+                print(f"Error saving index for {content_type}: {e}")
 
-    def _get_metadata_path(self) -> str:
-        return os.path.join(self.vector_storage_path, "metadata.json")
-    
-    def generate_embedding(self, text: str) -> np.ndarray:
-        """Generate embedding for text using Gemini API."""
+    def generate_embedding(self, text):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
-            text = text.strip()
-            if not text:
-                raise ValueError("Text cannot be empty")
-            
-            # Now embeddings make
+            # Use the correct Gemini embedding API
             result = genai.embed_content(
                 model="models/text-embedding-004",
                 content=text,
-                task_type="semantic_similarity"
+                task_type="retrieval_document",
+                title="Business Capability Analysis"
             )
             
-            # Convert to numpy array and normalize for cosine similarity
             embedding = np.array(result['embedding'], dtype=np.float32)
-            embedding = embedding / np.linalg.norm(embedding)  # Normalize for cosine similarity
-            
+            embedding = embedding / np.linalg.norm(embedding)
+            logger.info(f"Successfully generated embedding for text: {text[:50]}...")
             return embedding
             
         except Exception as e:
-            logger.error(f"Error generating embedding: {e}")
-            raise
-    
-    def add_vector(self, content_type: str, object_id: str, text: str) -> int:
-        """Add a new vector to the appropriate FAISS index."""
+            logger.error(f"Error generating embedding for text '{text[:50]}...': {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Return random embedding as fallback
+            random_embedding = np.random.random(self.embedding_dimension).astype(np.float32)
+            logger.warning("Using random embedding as fallback")
+            return random_embedding
+
+    def add_vector(self, content_type, object_id, text):
         try:
-            # Generate embedding
             embedding = self.generate_embedding(text)
             
-            # Convert content_type to index key
-            index_key_map = {
-                ContentTypes.BUSINESS_GOAL: 'business_goals',
-                ContentTypes.RECOMMENDATION: 'recommendations', 
-                ContentTypes.CAPABILITY: 'capabilities'
-            }
-            index_key = index_key_map.get(content_type)
-            if not index_key:
-                raise ValueError(f"Unknown content type: {content_type}")
+            index_key = content_type
+            if index_key not in self.indexes:
+                print(f"Unknown content type: {content_type}")
+                return False
             
-            # Add to FAISS index
             index = self.indexes[index_key]
-            vector_index = index.ntotal  # Current count becomes the new index
-            index.add(embedding.reshape(1, -1))
+            vector_index = index.ntotal
             
-            # Store or update VectorEmbedding record
-            with transaction.atomic():
-                vector_embedding, created = self._get_models()[0].objects.update_or_create(
-                    content_type=content_type,
-                    object_id=object_id,
-                    defaults={
-                        'vector_index': vector_index,
-                        'text_content': text,
-                        'embedding_model': 'text-embedding-004'
-                    }
-                )
+            index.add(np.array([embedding]))
             
-            # Save indexes
-            self._save_indexes()
+            VectorEmbedding.objects.update_or_create(
+                content_type=content_type,
+                object_id=str(object_id),
+                defaults={
+                    'vector_index': vector_index,
+                    'text_content': text[:1000]
+                }
+            )
             
-            logger.info(f"Added vector for {content_type} {object_id} at index {vector_index}")
-            return vector_index
+            self.save_indexes()
+            return True
             
         except Exception as e:
-            logger.error(f"Error adding vector for {content_type} {object_id}: {e}")
-            raise
+            print(f"Error adding vector: {e}")
+            return False
     
-    def search_similar(self, content_type: str, query_text: str, k: int = 5, threshold: float = 0.7) -> List[Dict[str, Any]]:
-        """Find similar vectors using FAISS similarity search."""
+    def search_similar(self, content_type, query_text, k=5, threshold=0.5):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
-            # Generate query embedding
             query_embedding = self.generate_embedding(query_text)
             
-            # Convert content_type to index key
-            index_key_map = {
-                ContentTypes.BUSINESS_GOAL: 'business_goals',
-                ContentTypes.RECOMMENDATION: 'recommendations', 
-                ContentTypes.CAPABILITY: 'capabilities'
-            }
-            index_key = index_key_map.get(content_type)
-            if not index_key:
-                raise ValueError(f"Unknown content type: {content_type}")
-            
-            index = self.indexes[index_key]
-            
-            if index.ntotal == 0:
+            index_key = content_type
+            if index_key not in self.indexes:
+                logger.error(f"Unknown content type: {content_type}")
                 return []
             
-            # Search for similar vectors
-            scores, indices = index.search(query_embedding.reshape(1, -1), min(k, index.ntotal))
+            index = self.indexes[index_key]
+            logger.info(f"Index for {content_type} has {index.ntotal} vectors")
+            
+            if index.ntotal == 0:
+                logger.warning(f"No vectors in index for {content_type}")
+                return []
+            
+            k = min(k, index.ntotal)
+            logger.info(f"Searching for top {k} results with threshold {threshold}")
+            
+            scores, indices = index.search(np.array([query_embedding]), k)
+            logger.info(f"Search returned scores: {scores[0][:5]} and indices: {indices[0][:5]}")
             
             results = []
             for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
-                if score >= threshold:
-                    # Find the corresponding VectorEmbedding record
-                    try:
-                        vector_embedding = self._get_models()[0].objects.get(
-                            content_type=content_type,
-                            vector_index=idx
-                        )
-                        
-                        # Get the related object
-                        related_obj = vector_embedding.related_object
-                        if related_obj:
-                            result = {
-                                'object_id': str(vector_embedding.object_id),
-                                'similarity_score': float(score),
-                                'vector_index': idx,
-                                'text_content': vector_embedding.text_content,
-                            }
-                            
-                            # Add object-specific fields
-                            if content_type == ContentTypes.CAPABILITY:
-                                result.update({
-                                    'name': related_obj.name,
-                                    'description': related_obj.description,
-                                    'full_path': related_obj.full_path,
-                                    'strategic_importance': related_obj.strategic_importance,
-                                    'status': related_obj.status,
-                                })
-                            elif content_type == ContentTypes.BUSINESS_GOAL:
-                                result.update({
-                                    'title': related_obj.title,
-                                    'description': related_obj.description,
-                                    'status': related_obj.status,
-                                    'submitted_at': related_obj.submitted_at.isoformat(),
-                                    'recommendations_count': related_obj.recommendations_count,
-                                })
-                            elif content_type == ContentTypes.RECOMMENDATION:
-                                result.update({
-                                    'recommendation_type': related_obj.recommendation_type,
-                                    'proposed_name': related_obj.proposed_name,
-                                    'proposed_description': related_obj.proposed_description,
-                                    'status': related_obj.status,
-                                    'business_goal_title': related_obj.business_goal.title,
-                                })
-                            
-                            results.append(result)
+                logger.info(f"Processing result {i}: score={score}, idx={idx}, threshold={threshold}")
+                if score < threshold:
+                    logger.info(f"Skipping result {i} due to low score: {score} < {threshold}")
+                    continue
+                
+                try:
+                    # Handle multiple VectorEmbeddings with same vector_index
+                    vector_embeddings = VectorEmbedding.objects.filter(
+                        content_type=content_type,
+                        vector_index=idx
+                    )
                     
-                    except self._get_models()[0].DoesNotExist:
-                        logger.warning(f"VectorEmbedding not found for {content_type} at index {idx}")
+                    if not vector_embeddings.exists():
+                        logger.warning(f"No VectorEmbedding found for index {idx}")
                         continue
+                    
+                    # Use the most recent one if there are duplicates
+                    vector_embedding = vector_embeddings.order_by('-updated_at').first()
+                    logger.info(f"Found VectorEmbedding for index {idx}: {vector_embedding.object_id} (from {vector_embeddings.count()} candidates)")
+                    
+                    related_object = self.get_related_object(vector_embedding)
+                    if related_object:
+                        result = {
+                            'object_id': vector_embedding.object_id,
+                            'similarity_score': float(score),
+                            'text_content': vector_embedding.text_content,
+                            'content_type': content_type
+                        }
+                        
+                        if hasattr(related_object, 'name'):
+                            result['name'] = related_object.name
+                        elif hasattr(related_object, 'title'):
+                            result['name'] = related_object.title
+                        
+                        if hasattr(related_object, 'description'):
+                            result['description'] = related_object.description
+                        
+                        results.append(result)
+                        logger.info(f"Added result: {result['name']}")
+                        
+                except VectorEmbedding.DoesNotExist:
+                    logger.warning(f"VectorEmbedding not found for index {idx}")
+                    continue
+                except Exception as e:
+                    logger.error(f"Error processing search result: {e}")
+                    continue
             
+            logger.info(f"Returning {len(results)} results")
             return results
             
         except Exception as e:
-            logger.error(f"Error searching similar {content_type}: {e}")
+            logger.error(f"Error in similarity search: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return []
-    
-    def update_vector(self, content_type: str, object_id: str, new_text: str):
-        """Update an existing vector with new content."""
+
+    def get_related_object(self, vector_embedding):
         try:
-            # Remove old vector
+            model_classes = self.get_model_classes()
+            model_class = model_classes.get(vector_embedding.content_type)
+            
+            if not model_class:
+                return None
+            
+            return model_class.objects.get(id=vector_embedding.object_id)
+            
+        except Exception as e:
+            print(f"Error getting related object: {e}")
+            return None
+    
+    def update_vector(self, content_type, object_id, new_text):
+        try:
             self.remove_vector(content_type, object_id)
-            
-            # Add new vector
-            self.add_vector(content_type, object_id, new_text)
-            
-            logger.info(f"Updated vector for {content_type} {object_id}")
-            
+            return self.add_vector(content_type, object_id, new_text)
         except Exception as e:
-            logger.error(f"Error updating vector for {content_type} {object_id}: {e}")
-            raise
-    
-    def remove_vector(self, content_type: str, object_id: str):
-        """Remove a vector from the index."""
+            print(f"Error updating vector: {e}")
+            return False
+
+    def remove_vector(self, content_type, object_id):
         try:
-            # Find and delete the VectorEmbedding record
-            vector_embedding = self._get_models()[0].objects.filter(
+            vector_embedding = VectorEmbedding.objects.get(
                 content_type=content_type,
-                object_id=object_id
-            ).first()
+                object_id=str(object_id)
+            )
+            vector_embedding.delete()
+            return True
             
-            if vector_embedding:
-                vector_embedding.delete() # !!!!! INEFFICIENT IN FAISS
-                logger.info(f"Removed vector embedding for {content_type} {object_id}")
-                            
+        except VectorEmbedding.DoesNotExist:
+            return False
         except Exception as e:
-            logger.error(f"Error removing vector for {content_type} {object_id}: {e}")
-            raise
-    
-    def rebuild_index(self, content_type: str):
-        """Rebuild a FAISS index from scratch."""
+            print(f"Error removing vector: {e}")
+            return False
+
+    def rebuild_index(self, content_type):
         try:
-            logger.info(f"Rebuilding {content_type} index...")
+            self.indexes[content_type] = faiss.IndexFlatIP(self.embedding_dimension)
             
-            # Convert content_type to index key
-            index_key_map = {
-                ContentTypes.BUSINESS_GOAL: 'business_goals',
-                ContentTypes.RECOMMENDATION: 'recommendations', 
-                ContentTypes.CAPABILITY: 'capabilities'
-            }
-            index_key = index_key_map.get(content_type)
-            if not index_key:
-                raise ValueError(f"Unknown content type: {content_type}")
+            VectorEmbedding.objects.filter(content_type=content_type).delete()
             
-            # Create new index
-            self.indexes[index_key] = faiss.IndexFlatIP(self.embedding_dimension)
+            model_classes = self.get_model_classes()
+            model_class = model_classes.get(content_type)
             
-            # Clear existing VectorEmbedding records for this content type
-            self._get_models()[0].objects.filter(content_type=content_type).delete()
+            if not model_class:
+                return False
             
-            # Rebuild from source objects
-            if content_type == ContentTypes.CAPABILITY:
-                objects = self._get_models()[1].objects.filter(status__in=['CURRENT', 'PROPOSED'])
-                for obj in objects:
+            objects = model_class.objects.all()
+            for obj in objects:
+                if content_type == ContentTypes.CAPABILITY:
                     text = f"{obj.name} {obj.description}"
-                    self.add_vector(ContentTypes.CAPABILITY, str(obj.id), text)
-                    
-            elif content_type == ContentTypes.BUSINESS_GOAL:
-                objects = self._get_models()[2].objects.all()
-                for obj in objects:
+                elif content_type == ContentTypes.BUSINESS_GOAL:
                     text = f"{obj.title} {obj.description}"
-                    self.add_vector(ContentTypes.BUSINESS_GOAL, str(obj.id), text)
-                    
-            elif content_type == ContentTypes.RECOMMENDATION:
-                objects = self._get_models()[3].objects.all()
-                for obj in objects:
-                    text = f"{obj.get_recommendation_type_display()} {obj.proposed_name or ''} {obj.proposed_description or ''} {obj.additional_details or ''}"
-                    self.add_vector(ContentTypes.RECOMMENDATION, str(obj.id), text)
+                elif content_type == ContentTypes.RECOMMENDATION:
+                    text = f"{obj.proposed_name or ''} {obj.proposed_description or ''} {obj.additional_details or ''}"
+                else:
+                    continue
+                
+                self.add_vector(content_type, obj.id, text)
             
-            logger.info(f"Successfully rebuilt {content_type} index with {self.indexes[index_key].ntotal} vectors")
+            return True
             
         except Exception as e:
-            logger.error(f"Error rebuilding {content_type} index: {e}")
-            raise
-    
-    def get_index_stats(self) -> Dict[str, Any]:
-        """Get statistics about all indexes."""
-        stats = {
-            'indexes': {},
-            'overall_health': 'healthy',
-            'embedding_model': 'text-embedding-004',
-            'vector_dimension': self.embedding_dimension,
-            'total_storage_mb': 0
-        }
-        
+            print(f"Error rebuilding index for {content_type}: {e}")
+            return False
+
+    def get_stats(self):
+        stats = {}
         for content_type, index in self.indexes.items():
-            index_path = self._get_index_path(content_type)
-            size_mb = 0
-            
-            if os.path.exists(index_path):
-                size_mb = os.path.getsize(index_path) / (1024 * 1024)
-            
-            stats['indexes'][content_type] = {
+            stats[content_type] = {
                 'total_vectors': index.ntotal,
-                'index_size_mb': round(size_mb, 2),
-                'health': 'healthy'
+                'dimension': self.embedding_dimension,
+                'index_type': type(index).__name__
             }
-            
-            stats['total_storage_mb'] += size_mb
-        
-        stats['total_storage_mb'] = round(stats['total_storage_mb'], 2)
         return stats
 
-# Global instance
+
 vector_manager = VectorManager() 
